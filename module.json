@@ -1,0 +1,13 @@
+{
+  "id": "auto-shielding-taunt",
+  "title": "Automated Shielding Taunt",
+  "version": "0.1.0",
+  "compatibility": { "minimum": "14", "verified": "14" },
+  "esmodules": ["main.js"],
+  "relationships": {
+    "systems": [{ "id": "pf2e", "type": "system" }],
+    "requires": [{ "id": "socketlib", "type": "module" }]
+  },
+  "manifest": "https://raw.githubusercontent.com/rrahkema/auto-shielding-taunt/main/module.json",
+  "download": "https://github.com/rrahkema/auto-shielding-taunt/releases/download/v0.1.0/module.zip"
+}

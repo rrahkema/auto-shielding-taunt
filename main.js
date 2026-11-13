@@ -18,6 +18,52 @@ async function addEffect(actor, uuid, flags, ctx) {
   await actor.createEmbeddedDocuments("Item", [src]);
 }
 
+function tokenLabel(t) {
+  if (!game.user.isGM && t.document.playersCanSeeName === false) return "Unknown creature";
+  return t.name;
+}
+
+// Radio buttons when limit is 1, capped checkboxes otherwise. Returns chosen tokens or null/[] on cancel.
+async function chooseTargets(tokens, limit) {
+  const single = limit === 1;
+  const type = single ? "radio" : "checkbox";
+
+  const rows = tokens.map((t, i) => `
+    <label class="stm-row" data-i="${i}" style="display:flex;align-items:center;gap:8px;margin:4px 0;cursor:pointer">
+      <input type="${type}" name="t" value="${i}">
+      <img src="${t.document.texture.src}" width="36" height="36" style="object-fit:contain;border:none">
+      <span>${tokenLabel(t)}</span>
+    </label>`).join("");
+
+  return foundry.applications.api.DialogV2.prompt({
+    window: { title: single ? "Taunt target" : `Taunt targets (max ${limit})` },
+    content: `<p>${single ? "Pick one." : `Tick up to ${limit}.`} Hover a row to ping the token.</p>${rows}`,
+    ok: {
+      label: "Taunt",
+      callback: (event, button) =>
+        [...button.form.querySelectorAll("input[name=t]:checked")].map(e => tokens[Number(e.value)])
+    },
+    render: (event, dialog) => {
+      const el = dialog.element;
+      const okBtn = el.querySelector('button[data-action="ok"]');
+      const inputs = [...el.querySelectorAll("input[name=t]")];
+
+      const update = () => {
+        const n = inputs.filter(i => i.checked).length;
+        if (okBtn) okBtn.disabled = n < 1 || n > limit;
+        if (!single) inputs.forEach(i => { i.disabled = !i.checked && n >= limit; });
+      };
+      inputs.forEach(i => i.addEventListener("change", update));
+
+      el.querySelectorAll(".stm-row").forEach(row =>
+        row.addEventListener("mouseenter", () => canvas.ping(tokens[Number(row.dataset.i)].center)));
+
+      update();
+    },
+    rejectClose: false
+  });
+}
+
 Hooks.once("socketlib.ready", () => {
   socket = socketlib.registerModule(MODULE);
 
@@ -59,14 +105,19 @@ Hooks.on("createChatMessage", async (msg) => {
   if (!guardian) return;
 
   const limit = guardian.itemTypes.feat.some(f => f.slug === "group-taunt") ? 3 : 1;
-  let targets = [...game.user.targets].map(t => t.actor).filter(Boolean);
+  const tokens = [...game.user.targets].filter(t => t.actor);
+
+  // Over the limit: ask first. Cancelling the dialog cancels everything.
+  let chosen = tokens;
+  if (tokens.length > limit) {
+    chosen = await chooseTargets(tokens, limit);
+    if (!chosen?.length) return ui.notifications.info("Shielding Taunt cancelled: no effects applied.");
+  }
 
   await addEffect(guardian, SHIELD_EFFECT);
 
-  if (!targets.length) return ui.notifications.warn("Shielding Taunt: no target selected.");
-  if (targets.length > limit) {
-    ui.notifications.warn(`Shielding Taunt: you can Taunt up to ${limit}. Using the first ${limit} targets.`);
-    targets = targets.slice(0, limit);
+  if (!chosen.length) {
+    return ui.notifications.warn("Shielding Taunt: no target selected. Only Raise a Shield applied.");
   }
 
   // Context so Taunt expires at the start of the Guardian's turn
@@ -86,5 +137,5 @@ Hooks.on("createChatMessage", async (msg) => {
     ui.notifications.warn("Shielding Taunt: Guardian has no initiative, so Taunt will expire at the start of the round.");
   }
 
-  await socket.executeAsGM("applyTaunt", guardian.uuid, targets.map(a => a.uuid), limit, ctx);
+  await socket.executeAsGM("applyTaunt", guardian.uuid, chosen.map(t => t.actor.uuid), limit, ctx);
 });

@@ -64,34 +64,44 @@ async function chooseTargets(tokens, limit) {
   });
 }
 
-Hooks.once("socketlib.ready", () => {
-  socket = socketlib.registerModule(MODULE);
+function setupSocket() {
+  if (socket) return;
+  try {
+    socket = socketlib.registerModule(MODULE);
 
-  // Runs on the GM's client
-  socket.register("applyTaunt", async (guardianUuid, targetUuids, limit, ctx) => {
-    const targets = (await Promise.all(targetUuids.map(u => fromUuid(u)))).filter(Boolean);
+    // Runs on the GM's client
+    socket.register("applyTaunt", async (guardianUuid, targetUuids, limit, ctx) => {
+      const targets = (await Promise.all(targetUuids.map(u => fromUuid(u)))).filter(Boolean);
 
-    // Taunt effects this guardian already has out, on enemies not in the new target list
-    const newIds = new Set(targets.map(a => a.uuid));
-    const old = [];
-    for (const tok of canvas.scene?.tokens ?? []) {
-      const a = tok.actor;
-      if (!a || newIds.has(a.uuid)) continue;
-      for (const e of a.itemTypes.effect) {
-        if (e.flags?.[MODULE]?.guardian === guardianUuid) old.push(e);
+      // Taunt effects this guardian already has out, on enemies not in the new target list
+      const newIds = new Set(targets.map(a => a.uuid));
+      const old = [];
+      for (const tok of canvas.scene?.tokens ?? []) {
+        const a = tok.actor;
+        if (!a || newIds.has(a.uuid)) continue;
+        for (const e of a.itemTypes.effect) {
+          if (e.flags?.[MODULE]?.guardian === guardianUuid) old.push(e);
+        }
       }
-    }
 
-    // Keep the most recent old ones that still fit under the limit, remove the rest
-    old.sort((x, y) => (y.flags[MODULE].at ?? 0) - (x.flags[MODULE].at ?? 0));
-    const room = Math.max(0, limit - targets.length);
-    for (const e of old.slice(room)) await e.delete();
+      // Keep the most recent old ones that still fit under the limit, remove the rest
+      old.sort((x, y) => (y.flags[MODULE].at ?? 0) - (x.flags[MODULE].at ?? 0));
+      const room = Math.max(0, limit - targets.length);
+      for (const e of old.slice(room)) await e.delete();
 
-    for (const a of targets) {
-      await addEffect(a, TAUNT_EFFECT, { guardian: guardianUuid, at: Date.now() }, ctx);
-    }
-  });
-});
+      for (const a of targets) {
+        await addEffect(a, TAUNT_EFFECT, { guardian: guardianUuid, at: Date.now() }, ctx);
+      }
+    });
+    console.log(`${MODULE} | socket registered`);
+  } catch (err) {
+    socket = undefined;
+    console.error(`${MODULE} | socket registration failed`, err);
+  }
+}
+
+Hooks.once("socketlib.ready", setupSocket);
+Hooks.once("ready", setupSocket);
 
 Hooks.on("createChatMessage", async (msg) => {
   if (msg.author?.id !== game.user.id) return;
@@ -137,5 +147,6 @@ Hooks.on("createChatMessage", async (msg) => {
     ui.notifications.warn("Shielding Taunt: Guardian has no initiative, so Taunt will expire at the start of the round.");
   }
 
+  if (!socket) return ui.notifications.error("Shielding Taunt: Socketlib registration failed. Check the console.");
   await socket.executeAsGM("applyTaunt", guardian.uuid, chosen.map(t => t.actor.uuid), limit, ctx);
 });
